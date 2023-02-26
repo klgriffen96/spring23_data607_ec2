@@ -1,0 +1,307 @@
+---
+title: "Data 607 Project 1 - Extra Credit"
+author: "Kayleah Griffen"
+date: "2023-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+In Project 1, a text file with chess tournament results was provided. The objective was to create an R Markdown file that generates a .CSV file with the following information for all of the players:
+
+Player’s Name, Player’s State, Total Number of Points, Player’s Pre-Rating, and Average Pre Chess Rating of Opponents 
+
+For example:
+
+Gary Hua, ON, 6.0, 1794, 1605
+
+For the extra credit project the objective was based on the ratings between the chess players and each of their opponents to:
+
+1) Calculate each player’s expected score 
+2) Calculate the difference between the expected score and their actual score  
+3) List the five players who most overperformed relative to their expected score
+4) List the five players that most underperformed relative to their expected score
+
+I based my calculations on:
+
+1) https://www.youtube.com/watch?v=AsYfbmp0To0&ab_channel=singingbanana
+2) https://en.wikipedia.org/wiki/Elo_rating_system (The Theory - Mathematical details section)
+
+Based on these sources, the probability that a player wins can be used as the expected score for that round.
+
+The formula for the probability that a player wins a round is:
+
+$$
+P(A wins) = \frac{1}{1+ 10^{(R_B - R_A)/400)}}
+$$
+
+To calculate a players expected score for the tournament:
+
+1) The probability that a player wins against each opponent can be calculated
+2) The sum of the probabilities against each player can be calculated and that is the expect score for that player for the tournament
+
+A players actual score is the sum of the points from their wins (1 point), their losses (0 points), and their draws (0.5 points).
+
+To take the example of Gary Hua again:
+
+Gary Huas expected score is based on seven rounds of opponents. Gary Huas pre-chess-rating was 1794. His opponents and their pre-chess-ratings are:
+
+1) P - 39, 1436 
+2) P - 21, 1563
+3) P - 18, 1600
+4) P - 14, 1610
+5) P - 7, 1649
+6) P - 12, 1663
+7) P - 4, 1716
+
+Gary Huas expected score for each opponent can be calculated.
+
+```{r}
+P39 <- 1/(1+(10^((1436 - 1794)/400)))
+P21 <- 1/(1+(10^((1563 - 1794)/400)))
+P18 <- 1/(1+(10^((1600 - 1794)/400)))
+P14 <- 1/(1+(10^((1610 - 1794)/400)))
+P7 <- 1/(1+(10^((1649 - 1794)/400)))
+P12 <- 1/(1+(10^((1663 - 1794)/400)))
+P4 <- 1/(1+(10^((1716 - 1794)/400)))
+```
+
+Gary Huas expected score for the entire tournament can be calculated.
+
+```{r}
+P_expected <- P39 + P21 + P18 + P14 + P7 + P12 + P4
+P_expected
+```
+
+His actual score is based on:
+W, W, W, W, W, D, D which translates to:
+```{r}
+P_actual <- 1 + 1 + 1 + 1 + 1 + 0.5 + 0.5
+P_actual
+```
+The difference between the actual and expected is 
+
+```{r}
+P_d <- P_actual - P_expected
+P_d
+```
+
+If you wanted to calculate the new rating of a player than the formula is 
+
+$$
+New Rating = rating + 32(score - expected score)
+$$
+
+In Gary Huas case his new rating is:
+
+```{r}
+round(1794 + 32*P_d)
+```
+
+The result here is 1821, in the score sheet the post score was 1817 - the discrepancy I speculate is due to rounding differences.
+
+Some of the work for Project 1 is repeated here because it provides a basis for the work for the extra credit.
+
+
+## Processing
+
+Load required packages.
+
+```{r, message=FALSE }
+library(RCurl)
+library(tidyverse)
+library(readr)
+library(kableExtra)
+```
+
+Read in the text file from github and take a look at the start.
+
+```{r get-text}
+x <- getURL("https://raw.githubusercontent.com/klgriffen96/spring23_data607_proj1/main/chess_scores.txt")
+glimpse(x)
+```
+
+Text files are generally broken into new lines using `\r\n` which can be seen in this file. Start by splitting on `\r\n` so each line is separated.
+
+```{r split-1}
+# Split x 
+s <- str_split_fixed(x, "\r\n", n=Inf)
+# View first ten entries
+s[1:10]
+```
+From the file extract the:
+
+- Starting row
+- Last player ID
+- The number of rounds
+
+```{r, warning = FALSE}
+# Get start row and last PID
+for (i in 1:length(s)){
+   temp <- as.integer(str_extract_all(s[i],"^\\s+[1]\\s+"))
+   temp2 <- as.integer(str_extract_all(s[i],"^\\s+[0-9]+"))
+   if (is.na(temp) == FALSE){
+     start_row <- i # Get the row that the actual games start on 
+     cat("Start row is: ", start_row)
+   }
+   if (is.na(temp2) == FALSE){
+     last_id <- temp2 # Get the PID of the last game
+   }
+}
+cat("Last PID is: ",last_id) 
+
+# Get the number of rounds
+for (i in 1:length(s)){
+  temp <- str_extract_all(s[i],"\\s+[0-9]+\\s+\\|\\s+$")
+  temp <- str_split_fixed(temp, "\\|", n=Inf)
+  if (temp[1][1] != "character(0)"){
+    n_rounds <- as.integer(temp[1][1])
+    cat("Number of rounds: ", n_rounds)
+    break
+  }                                 
+}
+```
+
+Form one dataframe that has the following information:
+
+- Player ID
+- Player Name
+- Total Number of Points
+- State
+- Players Pre-Rating
+
+Form a matrix that has the PID followed by the opponent IDs, with NAs for no opponent for that round.
+
+```{r simplify-s}
+
+# Make the dataframes
+p_info <- data.frame(
+  p_id = integer(),
+  p_name = character(),
+  p_points = double(),
+  p_state = character(),
+  p_prerating = integer()
+)
+
+o_ids <- matrix(, nrow = last_id, ncol = n_rounds + 1)
+
+for (i in seq(start_row,length(s),by =3)){
+  
+  ss_1 <- str_split_fixed(s[i],regex("|", literal=TRUE),n=Inf)
+  # PID | P Name | Total Points | X Opponent PID | X Opponent PID | etc...
+  # If X is W,L or D - read Opponent PID, increment total opponents
+  p_id <- as.integer(ss_1[1])
+  p_name <- str_trim(ss_1[2],side="both")
+  p_points <- as.double(ss_1[3])
+  
+  ss_2 <- str_split_fixed(s[i+1],regex("|", literal=TRUE), n=Inf)
+  # State | X/R: Player’s Pre-Rating
+  p_state <- str_trim(ss_2[1],side="both")
+  temp <- str_extract_all(ss_2[2],"[0-9]+")
+  p_prerating <- as.integer(temp[[1]][2])
+  
+  start_i <- 4
+  start_o <- 2
+  o_ids[p_id, 1] <- p_id
+  for (ii in start_i:(length(ss_1)-1)){
+      o_ids[p_id, start_o] <- as.integer(str_extract(ss_1[ii],"[0-9]+"))
+      start_o <- start_o + 1
+  }
+  
+  p_temp <- data.frame(
+    p_id,
+    p_name,
+    p_points,
+    p_state,
+    p_prerating)
+  
+  p_info <- rbind(p_info, p_temp)
+}
+```
+
+Take a look at the dataframe and do a quick check of it.
+
+```{r}
+head(p_info)
+```
+Take a look at the matrix with players/ opponent ids and do a quick check.
+
+```{r}
+head(o_ids)
+tail(o_ids)
+```
+
+Now that there is a dataframe with all the player information and a matrix with all of the player-opponent information each players expected score can be calculated. 
+
+```{r}
+p_expected <- matrix(, nrow = last_id, ncol = 2)
+for (i in 1:dim(o_ids)[1]){
+  temp_sum_expected <- 0
+  for (ii in 2:dim(o_ids)[2]){
+    temp_o_id <- o_ids[i,ii]
+    if (is.na(temp_o_id) == FALSE){
+      temp_ind_expected <- 1/
+        (1+(10^((p_info$p_prerating[temp_o_id] - p_info$p_prerating[i])/400)))
+      temp_sum_expected <- temp_sum_expected + temp_ind_expected
+    }
+  }
+  p_expected[i,1] <- o_ids[i,1]
+  p_expected[i,2] <- temp_sum_expected
+}
+```
+
+Take a look at the expected.
+
+```{r}
+head(p_expected)
+```
+A quick check passes.
+
+Now each players expected score has been calculated, the difference from their actual score can be calculated. A new dataframe containing all of this information can be created.
+
+```{r}
+# Make the dataframes
+p_scores <- data.frame(
+  p_id = p_info$p_id,
+  p_name = p_info$p_name,
+  p_expected = p_expected[,2],
+  p_actual = p_info$p_points,
+  p_difference = p_info$p_points - p_expected[,2]
+)
+```
+
+Take a look to do a quick check.
+
+```{r}
+head(p_scores)
+tail(p_scores)
+```
+The 5 players who most outperformed their expected score would be the players who had the greatest number for the `p_difference`.
+
+```{r}
+kable(head(arrange(p_scores, desc(p_difference)), 5)) |>
+  kable_styling("striped")
+```
+
+The 5 players who most underperformed their expected score would be the players who had the least numbers for the `p_difference`.
+
+```{r}
+kable(head(arrange(p_scores, (p_difference)), 5)) |>
+  kable_styling("striped")
+```
+
+## Conclusion
+
+In conclusion, the work from project 1 was adapted to meet the objective of this extra credit assignment. 
+
+For each player the following was calculated:
+
+
+1) Each player’s expected score 
+2) The difference between the expected score and their actual score  
+
+Then the five players who most overperformed relative to their expected score and the five players that most underperformed relative to their expected score were listed.
